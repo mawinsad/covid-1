@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>COVID-19 Thailand Dashboard</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { background-color: #f4f6f9; font-family: 'Sarabun', sans-serif; }
+        #map { height: 550px; border-radius: 10px; border: 2px solid #ddd; }
+        .card { box-shadow: 0 4px 8px rgba(0,0,0,0.1); border: none; margin-bottom: 20px; }
+        .profile-img { width: 120px; height: 120px; border-radius: 50%; object-fit: cover; border: 3px solid #0d6efd; }
+        .stat-box { text-align: center; padding: 20px; border-radius: 10px; color: white; }
+        .bg-primary { background: linear-gradient(135deg, #0d6efd, #0a58ca); }
+        .disclaimer { font-size: 0.9em; color: #dc3545; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container py-4">
+        <!-- Header & Profile -->
+        <div class="row align-items-center mb-4 card flex-row py-3">
+            <div class="col-md-2 text-center">
+                <!-- อ้างอิงไฟล์รูปภาพโดยตรง -->
+                <img src="พีรณัฐ แดงละออ.jpg" alt="Profile Picture" class="profile-img" onerror="this.src='https://via.placeholder.com/120?text=Profile'">
+            </div>
+            <div class="col-md-10">
+                <h1 class="text-primary fw-bold">COVID-19 Situation Dashboard</h1>
+                <p class="text-muted mb-0">ระบบวิเคราะห์และนำเสนอข้อมูลการติดเชื้อโควิด-19 ในประเทศไทย (จัดทำโดย พีรณัฐ แดงละออ)</p>
+                <span class="disclaimer">* หมายเหตุ: ชุดข้อมูลไม่มีข้อมูลการเสียชีวิต แดชบอร์ดนี้จึงแสดงผลเป็น "ความหนาแน่นของผู้ติดเชื้อ" แทน เพื่อหลีกเลี่ยงการสร้างข้อมูลเท็จ (Hallucination)</span>
+                
+                <!-- ส่วนสำหรับอัปโหลดไฟล์ CSV -->
+                <div class="mt-3 bg-light p-3 rounded border">
+                    <label for="csvFileInput" class="form-label fw-bold">📂 อัปโหลดไฟล์ข้อมูล (CSV):</label>
+                    <input class="form-control" type="file" id="csvFileInput" accept=".csv">
+                    <small class="text-muted">กรุณาเลือกไฟล์ final69_covid65.csv เพื่อแสดงผลแดชบอร์ด</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="card p-3 mb-4">
+            <div class="row">
+                <div class="col-md-6">
+                    <label for="provFilter" class="form-label fw-bold">กรองตามจังหวัด:</label>
+                    <select id="provFilter" class="form-select" disabled><option value="all">-- กรุณาอัปโหลดไฟล์ CSV ก่อน --</option></select>
+                </div>
+                <div class="col-md-6">
+                    <label for="monthFilter" class="form-label fw-bold">กรองตามเดือน (ประกาศผล):</label>
+                    <select id="monthFilter" class="form-select" disabled><option value="all">-- กรุณาอัปโหลดไฟล์ CSV ก่อน --</option></select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="stat-box bg-primary">
+                    <h3 id="totalCases" class="fw-bold" style="font-size: 2.5rem;">รอการอัปโหลดข้อมูล...</h3>
+                    <p class="mb-0">จำนวนผู้ป่วยทั้งหมด (ตามตัวกรอง)</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card p-3">
+                    <h5 class="fw-bold mb-3">📍 แผนที่การกระจายตัวผู้ป่วย (Spot Map อำเภอ & Choropleth จังหวัด)</h5>
+                    <div id="map"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card p-3"><canvas id="epiCurveChart" height="250"></canvas></div>
+            </div>
+            <div class="col-md-4">
+                <div class="card p-3"><canvas id="sexChart" height="250"></canvas></div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card p-3"><canvas id="provChart" height="250"></canvas></div>
+            </div>
+            <div class="col-md-6">
+                <div class="card p-3"><canvas id="ageChart" height="250"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <script>
+        let rawData = [];
+        let map = L.map('map').setView([13.736717, 100.523186], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
+        
+        let geojsonLayer;
+        let spotLayer = L.layerGroup().addTo(map);
+        let thaiGeoJSON = null;
+        let chartInstances = {};
+
+        // โหลด GeoJSON ขอบเขตประเทศไทยเตรียมไว้ก่อน
+        fetch('https://raw.githubusercontent.com/apisit/thailand.json/master/thailand.json')
+            .then(res => res.json())
+            .then(data => {
+                thaiGeoJSON = data;
+            });
+
+        // จัดการเมื่อมีการอัปโหลดไฟล์ CSV
+        document.getElementById('csvFileInput').addEventListener('change', function(e) {
+            let file = e.target.files[0];
+            if (!file) return;
+
+            document.getElementById('totalCases').innerText = "กำลังประมวลผลข้อมูล...";
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    rawData = results.data;
+                    setupFilters();
+                    updateDashboard();
+                }
+            });
+        });
+
+        function setupFilters() {
+            let provs = new Set();
+            let months = new Set();
+            rawData.forEach(r => {
+                if(r.province_of_onset) provs.add(r.province_of_onset.trim());
+                if(r.announce_date) {
+                    let parts = r.announce_date.split('/');
+                    if(parts.length === 3) months.add(`${parts[1].padStart(2,'0')}/${parts[2]}`);
+                }
+            });
+            
+            let pFilter = document.getElementById('provFilter');
+            pFilter.disabled = false;
+            pFilter.innerHTML = '<option value="all">-- ทั้งหมด --</option>';
+            Array.from(provs).sort().forEach(p => pFilter.innerHTML += `<option value="${p}">${p}</option>`);
+            
+            let mFilter = document.getElementById('monthFilter');
+            mFilter.disabled = false;
+            mFilter.innerHTML = '<option value="all">-- ทั้งหมด --</option>';
+            Array.from(months).sort().forEach(m => mFilter.innerHTML += `<option value="${m}">เดือน ${m}</option>`);
+
+            // เอา Event Listener เก่าออกเพื่อป้องกันการซ้อนทับกัน
+            pFilter.replaceWith(pFilter.cloneNode(true));
+            mFilter.replaceWith(mFilter.cloneNode(true));
+            
+            document.getElementById('provFilter').addEventListener('change', updateDashboard);
+            document.getElementById('monthFilter').addEventListener('change', updateDashboard);
+        }
+
+        function updateDashboard() {
+            let pVal = document.getElementById('provFilter').value;
+            let mVal = document.getElementById('monthFilter').value;
+            
+            let filtered = rawData.filter(r => {
+                let matchProv = pVal === 'all' || (r.province_of_onset && r.province_of_onset.trim() === pVal);
+                let matchMonth = mVal === 'all';
+                if (!matchMonth && r.announce_date) {
+                    let parts = r.announce_date.split('/');
+                    if(parts.length === 3) matchMonth = (`${parts[1].padStart(2,'0')}/${parts[2]}` === mVal);
+                }
+                return matchProv && matchMonth;
+            });
+
+            document.getElementById('totalCases').innerText = filtered.length.toLocaleString() + " ราย";
+            
+            let stats = processStats(filtered);
+            if(thaiGeoJSON) {
+                updateMap(stats.provGroup, stats.amphoeGroup);
+            }
+            renderCharts(stats);
+        }
+
+        function processStats(data) {
+            let provGroup = {}, amphoeGroup = {}, dateGroup = {};
+            let sexGroup = {'ชาย':0, 'หญิง':0, 'ไม่ระบุ':0};
+            let ageGroup = {'0-20 ปี':0, '21-40 ปี':0, '41-60 ปี':0, '60+ ปี':0, 'ไม่ระบุ':0};
+
+            data.forEach(r => {
+                let p = (r.province_of_onset || 'ไม่ระบุ').trim();
+                let a = (r.district_of_onset || 'ไม่ระบุ').trim();
+                let d = r.announce_date || 'ไม่ระบุ';
+                let sex = r.sex || '';
+                let age = parseInt(r.age);
+
+                provGroup[p] = (provGroup[p] || 0) + 1;
+                if(p !== 'ไม่ระบุ' && a !== 'ไม่ระบุ') amphoeGroup[`${p}_${a}`] = (amphoeGroup[`${p}_${a}`] || 0) + 1;
+                dateGroup[d] = (dateGroup[d] || 0) + 1;
+
+                if(sex.includes('ชาย')) sexGroup['ชาย']++;
+                else if(sex.includes('หญิง')) sexGroup['หญิง']++;
+                else sexGroup['ไม่ระบุ']++;
+
+                if(isNaN(age)) ageGroup['ไม่ระบุ']++;
+                else if(age<=20) ageGroup['0-20 ปี']++;
+                else if(age<=40) ageGroup['21-40 ปี']++;
+                else if(age<=60) ageGroup['41-60 ปี']++;
+                else ageGroup['60+ ปี']++;
+            });
+            return { provGroup, amphoeGroup, dateGroup, sexGroup, ageGroup };
+        }
+
+        function updateMap(provGroup, amphoeGroup) {
+            if(geojsonLayer) map.removeLayer(geojsonLayer);
+            spotLayer.clearLayers();
+
+            let maxCases = Math.max(...Object.values(provGroup), 1);
+            let provCentroids = {};
+
+            // 1. Choropleth Map (จังหวัด)
+            geojsonLayer = L.geoJSON(thaiGeoJSON, {
+                style: function(feature) {
+                    let pName = feature.properties.name || feature.properties.NAME_1 || feature.properties.PROV_NAMT || "";
+                    let cleanName = pName.replace('จ.', '').replace('จังหวัด', '').replace(' ', '');
+                    let cases = provGroup[cleanName] || 0;
+                    let opacity = cases > 0 ? 0.3 + (cases/maxCases)*0.7 : 0.1;
+                    return { fillColor: '#dc3545', weight: 1, color: '#fff', fillOpacity: opacity };
+                },
+                onEachFeature: function(feature, layer) {
+                    let bounds = layer.getBounds();
+                    let pName = feature.properties.name || feature.properties.NAME_1 || feature.properties.PROV_NAMT || "";
+                    let cleanName = pName.replace('จ.', '').replace('จังหวัด', '').replace(' ', '');
+                    provCentroids[cleanName] = bounds.getCenter();
+                    layer.bindPopup(`<b>จ.${cleanName}</b><br>ผู้ติดเชื้อ: ${provGroup[cleanName] || 0} ราย`);
+                }
+            }).addTo(map);
+
+            // 2. Spot Map (อำเภอ)
+            Object.keys(amphoeGroup).forEach(key => {
+                let [prov, amp] = key.split('_');
+                if(provCentroids[prov]) {
+                    let c = provCentroids[prov];
+                    let hash = 0; for(let i=0; i<amp.length; i++) hash = amp.charCodeAt(i) + ((hash << 5) - hash);
+                    let latOff = (Math.abs(Math.sin(hash)) * 0.5) - 0.25;
+                    let lngOff = (Math.abs(Math.cos(hash)) * 0.5) - 0.25;
+                    
+                    L.circleMarker([c.lat + latOff, c.lng + lngOff], {
+                        radius: 5, fillColor: '#ffc107', color: '#000', weight: 1, fillOpacity: 0.8
+                    }).bindPopup(`<b>อ.${amp} จ.${prov}</b><br>ผู้ติดเชื้อ: ${amphoeGroup[key]} ราย`).addTo(spotLayer);
+                }
+            });
+        }
+
+        function createChart(id, type, data, options) {
+            if(chartInstances[id]) chartInstances[id].destroy();
+            chartInstances[id] = new Chart(document.getElementById(id), { type, data, options });
+        }
+
+        function renderCharts(stats) {
+            // 1. Epidemic Curve
+            let dates = Object.keys(stats.dateGroup).filter(d => d.includes('/')).sort((a,b) => {
+                let [d1,m1,y1]=a.split('/'), [d2,m2,y2]=b.split('/');
+                return new Date(y1,m1-1,d1) - new Date(y2,m2-1,d2);
+            });
+            createChart('epiCurveChart', 'line', {
+                labels: dates,
+                datasets: [{ label: 'จำนวนผู้ติดเชื้อรายวัน', data: dates.map(d => stats.dateGroup[d]), borderColor: '#0d6efd', tension: 0.1, fill: false }]
+            }, { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'Epidemic Curve (การระบาดตามช่วงเวลา)' } }});
+
+            // 2. Province Bar Chart
+            let topProvs = Object.entries(stats.provGroup).filter(x => x[0]!=='ไม่ระบุ').sort((a,b) => b[1]-a[1]).slice(0, 10);
+            createChart('provChart', 'bar', {
+                labels: topProvs.map(x => x[0]),
+                datasets: [{ label: 'จำนวนผู้ป่วย', data: topProvs.map(x => x[1]), backgroundColor: '#198754' }]
+            }, { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: '10 อันดับจังหวัดที่พบผู้ติดเชื้อสูงสุด' } }});
+
+            // 3. Age Bar Chart
+            createChart('ageChart', 'bar', {
+                labels: Object.keys(stats.ageGroup),
+                datasets: [{ label: 'จำนวนผู้ป่วย', data: Object.values(stats.ageGroup), backgroundColor: '#0dcaf0' }]
+            }, { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'การกระจายตัวตามช่วงอายุ' } }});
+
+            // 4. Sex Pie Chart
+            createChart('sexChart', 'pie', {
+                labels: Object.keys(stats.sexGroup),
+                datasets: [{ data: Object.values(stats.sexGroup), backgroundColor: ['#0d6efd', '#d63384', '#6c757d'] }]
+            }, { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'สัดส่วนเพศผู้ป่วย' } }});
+        }
+    </script>
+</body>
+</html>
